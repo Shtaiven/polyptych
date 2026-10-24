@@ -2,9 +2,9 @@
 
 An invisible window for padding layouts in Wayland tiling compositors (COSMIC, sway, Hyprland, niri, …).
 
-The window is fully transparent unless it is **focused**, **hovered** or **floating**. In any of those states it shows a translucent background with centred text. Drag it with the left mouse button to move it; right-click to close it.
+The window always shows its **idle look**: a colour (fully transparent by default) or an image. When it is **focused**, **hovered** or **floating**, a translucent colour and centred text are drawn over that. Drag it with the left mouse button to move it; right-click to close it.
 
-It is a native Wayland client with no toolkit. It uses about 3.5 MB RSS and 0% CPU when idle, and it never allocates a window-sized buffer.
+It is a native Wayland client with no toolkit. It uses about 3.5 MB RSS and 0% CPU when idle. It never allocates a window-sized buffer, except for a tiled image.
 
 ## Install
 
@@ -18,15 +18,36 @@ pixi global install --force-reinstall --path .   # → ~/.pixi/bin/polyptych
 On the first run, a commented default config is written to `~/.config/polyptych/polyptych.toml` (or under `$XDG_CONFIG_HOME`). Running windows reload it on save.
 
 ```toml
-text = "Spacer, right-click to close"
+idle_color = "#00000000"   # #RRGGBB or #RRGGBBAA
+idle_image = "spacers"     # PNG/JPEG file or folder; overrides idle_color
+idle_image_fit = "fill"    # zoom | fill | stretch | tile
+focus_text = "Spacer, right-click to close"
+focus_color = "#00000059"  # drawn over the idle look when focused
 font = "sans"              # name, generic family or file path
 font_weight = 400          # 100–900, variable fonts only
 font_size = 18.0
-text_color = "#ffffffff"   # #RRGGBB or #RRGGBBAA
-background = "#00000059"   # #RRGGBB or #RRGGBBAA
+text_color = "#ffffffff"
 ```
 
 If the file is invalid, a warning is printed to stderr and the previous config stays in effect.
+
+## Idle look
+
+The idle look is always shown. Focus, hover or floating draws `focus_color` and `focus_text` on top of it, so a transparent `focus_color` lets the idle look show through.
+
+- `idle_color` fills the window when no image is set.
+- `idle_image` is a PNG or JPEG file, recognised by its contents. If it is set, `idle_color` is ignored. If the image can't be loaded, a warning is printed and `idle_color` is used.
+- If `idle_image` is a folder, each spacer picks a random `.png`, `.jpg` or `.jpeg` from it when it opens. Subfolders aren't searched.
+- Paths can be absolute, start with `~/`, or be relative to the config file's folder. So `idle_image = "spacers"` means `~/.config/polyptych/spacers`.
+- `idle_image_fit` controls how the image fills the window:
+  - `zoom`: scaled to fit inside the window, keeping its aspect ratio.
+  - `fill`: scaled to cover the window, cropping the overflow.
+  - `stretch`: scaled to the window size exactly.
+  - `tile`: repeated at its own pixel size from the top left.
+
+The image is decoded once and stays in memory as raw pixels, which costs width × height × 4 bytes. A 4K wallpaper is about 33 MB, so prefer small images. `zoom`, `fill` and `stretch` are scaled by the compositor at no extra cost. `tile` also needs a window-sized buffer. Images larger than 8192 px on either side are refused.
+
+Image files aren't watched for changes. A spacer loads its image when it opens and when `idle_image` changes in the config.
 
 ## Fonts
 

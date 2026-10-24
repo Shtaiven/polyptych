@@ -1,21 +1,24 @@
 //! An invisible Wayland window for padding tiling layouts.
 //!
-//! It is fully transparent unless it is focused, hovered or floating. In any of
-//! those states it shows a translucent background with centred text. Dragging
-//! with the left button moves it and a right click closes it.
+//! It always shows its idle look: a colour (transparent by default) or an
+//! image. When it is focused, hovered or floating, a translucent colour and
+//! centred text are drawn over that. Dragging with the left button moves it
+//! and a right click closes it.
 //!
-//! The window never allocates a window-sized buffer. The background is a single
-//! pixel scaled up with `wp_viewporter`, and the text is a small subsurface.
+//! Colours are single pixels scaled up with `wp_viewporter`, the image is
+//! scaled the same way, and the text is a small subsurface. Only a tiled image
+//! needs a window-sized buffer.
 
 mod config;
 mod font;
+mod image;
 
 use std::fs;
 use std::mem::MaybeUninit;
 use std::os::fd::AsFd;
 
 use ab_glyph::{Font, FontVec, PxScale, ScaleFont, VariableFont, point};
-use config::Config;
+use config::{Config, Fit};
 use rustix::fs::inotify;
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState, Region},
@@ -27,7 +30,9 @@ use smithay_client_toolkit::{
         client::{
             Connection, Dispatch, QueueHandle, delegate_noop,
             globals::registry_queue_init,
-            protocol::{wl_output, wl_pointer, wl_seat, wl_shm, wl_subsurface, wl_surface},
+            protocol::{
+                wl_buffer, wl_output, wl_pointer, wl_seat, wl_shm, wl_subsurface, wl_surface,
+            },
         },
         csd_frame::WindowState,
         protocols::wp::viewporter::client::{
@@ -48,7 +53,7 @@ use smithay_client_toolkit::{
             window::{Window, WindowConfigure, WindowDecorations, WindowHandler},
         },
     },
-    shm::{Shm, ShmHandler, slot::SlotPool},
+    shm::{Shm, ShmHandler, raw::RawPool, slot::SlotPool},
     subcompositor::SubcompositorState,
 };
 
@@ -91,13 +96,22 @@ fn main() {
         .expect("wp_viewporter missing")
         .get_viewport(window.wl_surface(), &qh, ());
 
-    // Text lives on a subsurface with an empty input region, so the pointer only
+    // Layers above the main surface, bottom to top: the idle image, the focus
+    // colour and the text. Each has an empty input region, so the pointer only
     // ever sees the main surface and hover tracking stays simple.
-    let (text_sub, text_surface) =
-        subcompositor.create_subsurface(window.wl_surface().clone(), &qh);
-    if let Ok(region) = Region::new(&compositor) {
-        text_surface.set_input_region(Some(region.wl_region()));
-    }
+    let layer = || {
+        let (sub, surface) = subcompositor.create_subsurface(window.wl_surface().clone(), &qh);
+        if let Ok(region) = Region::new(&compositor) {
+            surface.set_input_region(Some(region.wl_region()));
+        }
+        (sub, surface)
+    };
+    let (image_sub, image_surface) = layer();
+    let (_overlay_sub, overlay_surface) = layer();
+    let (text_sub, text_surface) = layer();
+    let viewporter_global = viewporter.get().expect("wp_viewporter missing");
+    let image_viewport = viewporter_global.get_viewport(&image_surface, &qh, ());
+    let overlay_viewport = viewporter_global.get_viewport(&overlay_surface, &qh, ());
 
     config::ensure_exists();
     let config = config::load().unwrap_or_else(|e| {
@@ -135,7 +149,9 @@ fn main() {
         Err(e) => eprintln!("{APP}: not watching config for changes: {e}"),
     }
 
+    let idle_image = load_idle_image(&config, &shm);
     let mut state = State {
+        qh: qh.clone(),
         registry_state: RegistryState::new(&globals),
         seat_state: SeatState::new(&globals, &qh),
         output_state: OutputState::new(&globals, &qh),
@@ -144,11 +160,19 @@ fn main() {
         viewporter,
         window,
         viewport,
+        image_surface,
+        image_sub,
+        image_viewport,
+        overlay_surface,
+        _overlay_sub,
+        overlay_viewport,
         text_surface,
         text_sub,
         pointer: None,
         seat: None,
         font: resolve_font(&config.font),
+        idle_image,
+        image_layout: None,
         config,
         text: Text::default(),
         scale: 1,
@@ -195,6 +219,56 @@ fn resolve_font(query: &str) -> Option<font::Face> {
     face
 }
 
+/// Loads the configured idle image into its own shm pool. Buffers are views
+/// into the pool, which never changes after this.
+fn load_idle_image(config: &Config, shm: &Shm) -> Option<IdleImage> {
+    let path = config.idle_image.as_ref()?;
+    let image = image::load_any(path).map_err(|e| eprintln!("{APP}: {e}")).ok()?;
+    let (w, h) = (image.width as i32, image.height as i32);
+    // One spare row: compositors may check a cropped view's offset plus
+    // stride × height against the pool size, which overshoots the last row.
+    let mut pool = RawPool::new(image.pixels.len() + w as usize * 4, shm)
+        .map_err(|e| eprintln!("{APP}: no memory for idle image: {e}"))
+        .ok()?;
+    pool.mmap()[..image.pixels.len()].copy_from_slice(&image.pixels);
+    Some(IdleImage { pool, buffers: Vec::new(), width: w as u32, height: h as u32 })
+}
+
+struct IdleImage {
+    pool: RawPool,
+    /// The attached view last, the one it replaced before it, so a buffer is
+    /// never destroyed while it may still be on screen.
+    buffers: Vec<wl_buffer::WlBuffer>,
+    width: u32,
+    height: u32,
+}
+
+impl IdleImage {
+    /// A buffer showing the (x, y, w, h) rectangle of the image, made by
+    /// pointing into the pool rather than copying.
+    fn view(
+        &mut self,
+        (x, y, w, h): (u32, u32, u32, u32),
+        qh: &QueueHandle<State>,
+    ) -> wl_buffer::WlBuffer {
+        let offset = ((y * self.width + x) * 4) as i32;
+        let stride = self.width as i32 * 4;
+        let format = wl_shm::Format::Argb8888;
+        let buffer = self.pool.create_buffer(offset, w as i32, h as i32, stride, format, (), qh);
+        if self.buffers.len() == 2 {
+            self.buffers.remove(0).destroy();
+        }
+        self.buffers.push(buffer.clone());
+        buffer
+    }
+}
+
+impl Drop for IdleImage {
+    fn drop(&mut self) {
+        self.buffers.drain(..).for_each(|b| b.destroy());
+    }
+}
+
 /// Rasterized text in premultiplied ARGB8888, sized in buffer pixels.
 #[derive(Default)]
 struct Text {
@@ -206,6 +280,7 @@ struct Text {
 }
 
 struct State {
+    qh: QueueHandle<State>,
     registry_state: RegistryState,
     seat_state: SeatState,
     output_state: OutputState,
@@ -215,6 +290,12 @@ struct State {
 
     window: Window,
     viewport: WpViewport,
+    image_surface: wl_surface::WlSurface,
+    image_sub: wl_subsurface::WlSubsurface,
+    image_viewport: WpViewport,
+    overlay_surface: wl_surface::WlSurface,
+    _overlay_sub: wl_subsurface::WlSubsurface,
+    overlay_viewport: WpViewport,
     text_surface: wl_surface::WlSurface,
     text_sub: wl_subsurface::WlSubsurface,
     pointer: Option<wl_pointer::WlPointer>,
@@ -223,6 +304,9 @@ struct State {
 
     config: Config,
     font: Option<font::Face>,
+    idle_image: Option<IdleImage>,
+    /// The (width, height, scale) the image layer was set up for; `None` means stale.
+    image_layout: Option<(u32, u32, i32)>,
     text: Text,
     scale: i32,
     size: (u32, u32),
@@ -245,7 +329,12 @@ impl State {
                 if config.font != self.config.font {
                     self.font = resolve_font(&config.font);
                 }
+                if config.idle_image != self.config.idle_image {
+                    self.idle_image = None;
+                    self.idle_image = load_idle_image(&config, &self.shm);
+                }
                 self.config = config;
+                self.image_layout = None;
                 self.text = Text::default();
                 self.draw();
             }
@@ -289,7 +378,7 @@ impl State {
         // wider than the window gets its own line and is cropped when drawn.
         let max_width = (self.size.0 * self.scale as u32) as f32;
         let mut lines = Vec::new();
-        for paragraph in self.config.text.split('\n') {
+        for paragraph in self.config.focus_text.split('\n') {
             let mut line = String::new();
             for word in paragraph.split_whitespace() {
                 let candidate = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
@@ -350,20 +439,26 @@ impl State {
         let visible = self.visible();
         let surface = self.window.wl_surface().clone();
 
-        // Background: one pixel stretched over the whole window.
-        let color = if visible { self.config.background } else { 0 };
-        let (buffer, canvas) = self
-            .pool
-            .create_buffer(1, 1, 4, wl_shm::Format::Argb8888)
-            .expect("create buffer");
-        canvas[..4].copy_from_slice(&color.to_le_bytes());
-        buffer.attach_to(&surface).expect("attach");
         let (w, h) = self.size;
-        self.viewport.set_destination(w as i32, h as i32);
-        surface.damage_buffer(0, 0, 1, 1);
-        // Without explicit geometry the compositor would include the text
-        // subsurface in the window's size, so text could hold the window open.
+        // Idle colour, or nothing under an image, stretched over the window.
+        let idle = if self.idle_image.is_some() { 0 } else { self.config.idle_color };
+        self.fill(&surface, &self.viewport.clone(), idle);
+        // Without explicit geometry the compositor would include the
+        // subsurfaces in the window's size, so text could hold the window open.
         self.window.set_window_geometry(0, 0, w, h);
+
+        if self.image_layout != Some((w, h, self.scale)) {
+            self.image_layout = Some((w, h, self.scale));
+            self.layout_image();
+        }
+
+        // The focus colour goes over the idle look while visible.
+        if visible {
+            let (surface, viewport) = (self.overlay_surface.clone(), self.overlay_viewport.clone());
+            self.fill(&surface, &viewport, self.config.focus_color);
+        } else {
+            self.overlay_surface.attach(None, 0, 0);
+        }
 
         // Text subsurface: attached when visible, unmapped otherwise. Text is
         // only laid out while visible, and again when the width changes; it is
@@ -395,9 +490,97 @@ impl State {
         } else {
             self.text_surface.attach(None, 0, 0);
         }
-        // Subsurfaces are synchronized, so this applies with the parent commit.
+        // Subsurfaces are synchronized, so these apply with the parent commit.
+        self.image_surface.commit();
+        self.overlay_surface.commit();
         self.text_surface.commit();
         surface.commit();
+    }
+
+    /// Covers the window with one pixel of `color`, stretched by the viewport.
+    fn fill(&mut self, surface: &wl_surface::WlSurface, viewport: &WpViewport, color: u32) {
+        let (buffer, canvas) = self
+            .pool
+            .create_buffer(1, 1, 4, wl_shm::Format::Argb8888)
+            .expect("create buffer");
+        canvas[..4].copy_from_slice(&color.to_le_bytes());
+        buffer.attach_to(surface).expect("attach");
+        viewport.set_destination(self.size.0 as i32, self.size.1 as i32);
+        surface.damage_buffer(0, 0, 1, 1);
+    }
+
+    /// Places the idle image for the current window size and fit mode.
+    fn layout_image(&mut self) {
+        let surface = self.image_surface.clone();
+        let viewport = self.image_viewport.clone();
+        let Some(image) = &self.idle_image else {
+            surface.attach(None, 0, 0);
+            return;
+        };
+        let (w, h) = (self.size.0 as u64, self.size.1 as u64);
+        let (iw, ih) = (image.width as u64, image.height as u64);
+        // Whether the window is wider than the image, relative to their heights.
+        let wider = w * ih > h * iw;
+        // Cropping uses buffer views, not the viewport source: COSMIC clips
+        // surfaces with an offset source wrongly, hiding most of the image.
+        viewport.set_source(-1.0, -1.0, -1.0, -1.0);
+        surface.set_buffer_scale(1);
+        let mut rect = (0, 0, iw as u32, ih as u32);
+        let (mut x, mut y) = (0, 0);
+        match self.config.idle_image_fit {
+            Fit::Stretch => viewport.set_destination(w as i32, h as i32),
+            Fit::Zoom => {
+                let (dw, dh) = if wider { (iw * h / ih, h) } else { (w, ih * w / iw) };
+                let (dw, dh) = (dw.max(1), dh.max(1));
+                (x, y) = (((w - dw) / 2) as i32, ((h - dh) / 2) as i32);
+                viewport.set_destination(dw as i32, dh as i32);
+            }
+            Fit::Fill => {
+                // Crop the image to the window's aspect ratio, centred.
+                let (sw, sh) = if wider {
+                    (iw, (iw * h / w).clamp(1, ih))
+                } else {
+                    ((ih * w / h).clamp(1, iw), ih)
+                };
+                rect = (((iw - sw) / 2) as u32, ((ih - sh) / 2) as u32, sw as u32, sh as u32);
+                viewport.set_destination(w as i32, h as i32);
+            }
+            Fit::Tile => {
+                viewport.set_destination(-1, -1);
+                self.tile_image();
+                self.image_sub.set_position(0, 0);
+                return;
+            }
+        }
+        let image = self.idle_image.as_mut().expect("checked above");
+        let buffer = image.view(rect, &self.qh);
+        surface.attach(Some(&buffer), 0, 0);
+        surface.damage_buffer(0, 0, rect.2 as i32, rect.3 as i32);
+        self.image_sub.set_position(x, y);
+    }
+
+    /// Repeats the image over a window-sized buffer, one image pixel per
+    /// buffer pixel.
+    fn tile_image(&mut self) {
+        let Some(image) = &mut self.idle_image else { return };
+        let s = self.scale as u32;
+        let (bw, bh) = (self.size.0 * s, self.size.1 * s);
+        let (iw, ih) = (image.width as usize, image.height as usize);
+        let src = &image.pool.mmap()[..iw * ih * 4];
+        let (buffer, canvas) = self
+            .pool
+            .create_buffer(bw as i32, bh as i32, bw as i32 * 4, wl_shm::Format::Argb8888)
+            .expect("create buffer");
+        let row_len = bw as usize * 4;
+        for (y, row) in canvas.chunks_exact_mut(row_len).take(bh as usize).enumerate() {
+            let line = &src[(y % ih) * iw * 4..][..iw * 4];
+            for (chunk, _) in row.chunks_mut(iw * 4).zip(0..) {
+                chunk.copy_from_slice(&line[..chunk.len()]);
+            }
+        }
+        buffer.attach_to(&self.image_surface).expect("attach");
+        self.image_surface.set_buffer_scale(self.scale);
+        self.image_surface.damage_buffer(0, 0, bw as i32, bh as i32);
     }
 }
 
@@ -565,6 +748,7 @@ impl ShmHandler for State {
 }
 
 delegate_noop!(State: WpViewporter);
+delegate_noop!(State: ignore wl_buffer::WlBuffer);
 
 impl Dispatch<WpViewport, ()> for State {
     fn event(

@@ -5,8 +5,20 @@ use serde::Deserialize;
 
 const DEFAULT_FILE: &str = r##"# polyptych configuration. Changes apply to running windows on save.
 
-# Text shown in the middle of the window.
-text = "Spacer, right-click to close"
+# The spacer always shows its idle look. When it is focused, hovered or
+# floating, focus_color and focus_text are drawn over it.
+
+# Idle look: a colour, or an image that replaces it.
+idle_color = "#00000000"
+# A PNG or JPEG file, or a folder to pick a random one from each time a
+# spacer opens. Relative paths are relative to this file's folder.
+# idle_image = "spacers"
+# How the image fills the window: "zoom" (fit inside), "fill" (cover and
+# crop), "stretch" or "tile".
+idle_image_fit = "fill"
+
+# Text shown in the middle of the window when focused.
+focus_text = "Spacer, right-click to close"
 
 # Font: a name ("Inter", "Noto Sans Bold"), a generic family ("sans",
 # "serif", "monospace") or a file path ("/path/to/font.ttf").
@@ -19,42 +31,65 @@ font_weight = 400
 # Font size in logical pixels.
 font_size = 18.0
 
-# Colours are "#RRGGBB" or "#RRGGBBAA".
+# Colours are "#RRGGBB" or "#RRGGBBAA". A transparent focus_color lets the
+# idle look show through.
 text_color = "#ffffffff"
-background = "#00000059"
+focus_color = "#00000059"
 "##;
 
 /// Config with colours already converted to premultiplied ARGB8888.
 #[derive(Clone, PartialEq)]
 pub struct Config {
-    pub text: String,
+    pub idle_color: u32,
+    pub idle_image: Option<PathBuf>,
+    pub idle_image_fit: Fit,
+    pub focus_text: String,
     pub font: String,
     pub font_weight: u16,
     pub font_size: f32,
     pub text_color: u32,
-    pub background: u32,
+    pub focus_color: u32,
+}
+
+/// How the idle image is fitted to the window.
+#[derive(Clone, Copy, PartialEq, Debug, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Fit {
+    /// Scaled to fit inside, keeping its aspect ratio.
+    Zoom,
+    /// Scaled to cover the window, cropping the overflow.
+    Fill,
+    Stretch,
+    /// Repeated at its own size from the top left.
+    Tile,
 }
 
 #[derive(Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct Raw {
-    text: String,
+    idle_color: String,
+    idle_image: String,
+    idle_image_fit: Fit,
+    focus_text: String,
     font: String,
     font_weight: u16,
     font_size: f32,
     text_color: String,
-    background: String,
+    focus_color: String,
 }
 
 impl Default for Raw {
     fn default() -> Self {
         Raw {
-            text: "Spacer, right-click to close".into(),
+            idle_color: "#00000000".into(),
+            idle_image: String::new(),
+            idle_image_fit: Fit::Fill,
+            focus_text: "Spacer, right-click to close".into(),
             font: "sans".into(),
             font_weight: 400,
             font_size: 18.0,
             text_color: "#ffffffff".into(),
-            background: "#00000059".into(),
+            focus_color: "#00000059".into(),
         }
     }
 }
@@ -74,12 +109,15 @@ impl Raw {
             return Err(format!("font_weight must be in 1..=1000, got {}", self.font_weight));
         }
         Ok(Config {
-            text: self.text,
+            idle_color: parse_color(&self.idle_color)?,
+            idle_image: resolve_path(&self.idle_image),
+            idle_image_fit: self.idle_image_fit,
+            focus_text: self.focus_text,
             font: self.font,
             font_weight: self.font_weight,
             font_size: self.font_size,
             text_color: parse_color(&self.text_color)?,
-            background: parse_color(&self.background)?,
+            focus_color: parse_color(&self.focus_color)?,
         })
     }
 }
@@ -97,6 +135,19 @@ fn parse_color(s: &str) -> Result<u32, String> {
     let [r, g, b, a] = rgba.to_be_bytes();
     let pm = |c: u8| (c as u32 * a as u32 + 127) / 255;
     Ok((a as u32) << 24 | pm(r) << 16 | pm(g) << 8 | pm(b))
+}
+
+/// Expands `~/`, and resolves relative paths against the config folder.
+fn resolve_path(s: &str) -> Option<PathBuf> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let home = env::var_os("HOME").map(PathBuf::from);
+    Some(match (s.strip_prefix("~/"), home) {
+        (Some(rest), Some(home)) => home.join(rest),
+        _ => dir().join(s),
+    })
 }
 
 pub fn dir() -> PathBuf {
@@ -152,5 +203,17 @@ mod tests {
     fn default_file_parses() {
         let c = toml::from_str::<Raw>(DEFAULT_FILE).unwrap().resolve().unwrap();
         assert!(c == Config::default());
+    }
+
+    #[test]
+    fn idle_options() {
+        let parse = |s: &str| toml::from_str::<Raw>(s).map_err(|e| e.to_string())?.resolve();
+        assert!(parse(r#"idle_image_fit = "tile""#).unwrap().idle_image_fit == Fit::Tile);
+        assert!(parse(r#"idle_image_fit = "bogus""#).is_err());
+        assert!(parse(r#"text = "old name""#).is_err());
+        let abs = parse(r#"idle_image = "/a/b""#).unwrap().idle_image;
+        assert_eq!(abs, Some(PathBuf::from("/a/b")));
+        let rel = parse(r#"idle_image = "spacers""#).unwrap().idle_image;
+        assert_eq!(rel, Some(dir().join("spacers")));
     }
 }
