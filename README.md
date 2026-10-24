@@ -2,7 +2,7 @@
 
 An invisible window for padding layouts in Wayland tiling compositors (COSMIC, sway, Hyprland, niri, …).
 
-The window is fully transparent unless it is **focused**, **hovered** or **floating**. In any of those states it shows a translucent background with centred text. Click it to close it.
+The window is fully transparent unless it is **focused**, **hovered** or **floating**. In any of those states it shows a translucent background with centred text. Drag it with the left mouse button to move it; right-click to close it.
 
 It is a native Wayland client with no toolkit. It uses about 3.5 MB RSS and 0% CPU when idle, and it never allocates a window-sized buffer.
 
@@ -10,7 +10,7 @@ It is a native Wayland client with no toolkit. It uses about 3.5 MB RSS and 0% C
 
 ```sh
 cargo install --path .           # → ~/.cargo/bin/polyptych
-pixi global install --path .     # → ~/.pixi/bin/polyptych
+pixi global install --force-reinstall --path .   # → ~/.pixi/bin/polyptych
 ```
 
 ## Config
@@ -18,7 +18,7 @@ pixi global install --path .     # → ~/.pixi/bin/polyptych
 On the first run, a commented default config is written to `~/.config/polyptych/polyptych.toml` (or under `$XDG_CONFIG_HOME`). Running windows reload it on save.
 
 ```toml
-text = "Spacer, click to close"
+text = "Spacer, right-click to close"
 font = "sans"              # name, generic family or file path
 font_weight = 400          # 100–900, variable fonts only
 font_size = 18.0
@@ -58,3 +58,4 @@ Tiling compositors set the xdg_toplevel `tiled_*` states on tiled windows. A win
 ## Notes
 
 - COSMIC draws its active-window hint around the spacer while it has focus. Set the hint size to 0 in Settings if that bothers you.
+- polyptych sets no real minimum size, but compositors may. COSMIC won't shrink a tile below 360×240 px, whatever the window asks for. Sway's minimum is 100×60.

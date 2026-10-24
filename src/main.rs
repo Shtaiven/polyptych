@@ -1,8 +1,8 @@
 //! An invisible Wayland window for padding tiling layouts.
 //!
 //! It is fully transparent unless it is focused, hovered or floating. In any of
-//! those states it shows a translucent background with centred text, and a click
-//! closes it.
+//! those states it shows a translucent background with centred text. Dragging
+//! with the left button moves it and a right click closes it.
 //!
 //! The window never allocates a window-sized buffer. The background is a single
 //! pixel scaled up with `wp_viewporter`, and the text is a small subsurface.
@@ -44,7 +44,7 @@ use smithay_client_toolkit::{
     shell::{
         WaylandSurface,
         xdg::{
-            XdgShell,
+            XdgShell, XdgSurface,
             window::{Window, WindowConfigure, WindowDecorations, WindowHandler},
         },
     },
@@ -54,6 +54,9 @@ use smithay_client_toolkit::{
 
 pub const APP: &str = env!("CARGO_PKG_NAME");
 const DEFAULT_SIZE: (u32, u32) = (400, 300);
+/// Linux input event codes for the mouse buttons.
+const BTN_LEFT: u32 = 0x110;
+const BTN_RIGHT: u32 = 0x111;
 
 fn main() {
     let conn = Connection::connect_to_env().expect("not running under Wayland");
@@ -78,6 +81,9 @@ fn main() {
     );
     window.set_title(APP);
     window.set_app_id(APP);
+    // An explicit tiny minimum: COSMIC substitutes 320x240 for floating
+    // windows that leave it unset.
+    window.set_min_size(Some((1, 1)));
     window.commit();
 
     let viewport = viewporter
@@ -141,6 +147,7 @@ fn main() {
         text_surface,
         text_sub,
         pointer: None,
+        seat: None,
         font: resolve_font(&config.font),
         config,
         text: Text::default(),
@@ -152,7 +159,6 @@ fn main() {
         floating: false,
         exit: false,
     };
-    state.rasterize_text();
 
     while !state.exit {
         // No timeout: sleep until a Wayland or inotify event arrives.
@@ -195,6 +201,8 @@ struct Text {
     pixels: Vec<u8>,
     width: u32,
     height: u32,
+    /// The (window width, scale) this was laid out for; `None` means stale.
+    layout: Option<(u32, i32)>,
 }
 
 struct State {
@@ -210,6 +218,8 @@ struct State {
     text_surface: wl_surface::WlSurface,
     text_sub: wl_subsurface::WlSubsurface,
     pointer: Option<wl_pointer::WlPointer>,
+    /// The seat the pointer belongs to, needed to start an interactive move.
+    seat: Option<wl_seat::WlSeat>,
 
     config: Config,
     font: Option<font::Face>,
@@ -236,7 +246,7 @@ impl State {
                     self.font = resolve_font(&config.font);
                 }
                 self.config = config;
-                self.rasterize_text();
+                self.text = Text::default();
                 self.draw();
             }
             Ok(_) => {}
@@ -244,8 +254,10 @@ impl State {
         }
     }
 
+    /// Lays the text out word-wrapped to the window width and rasterizes it.
     fn rasterize_text(&mut self) {
-        self.text = Text::default();
+        let layout = (self.size.0, self.scale);
+        self.text = Text { layout: Some(layout), ..Text::default() };
         let Some(face) = &self.font else { return };
         // The font is read from disk only while rasterizing, then dropped.
         let font = fs::read(&face.path)
@@ -263,35 +275,64 @@ impl State {
         let px = self.config.font_size * self.scale as f32;
         let font = font.as_scaled(PxScale::from(px));
 
-        let mut glyphs = Vec::new();
-        let mut x = 0.0;
-        let mut prev = None;
-        for c in self.config.text.chars() {
-            let id = font.glyph_id(c);
-            if let Some(p) = prev {
-                x += font.kern(p, id);
+        let measure = |line: &str| {
+            let mut prev = None;
+            line.chars().fold(0.0, |x, c| {
+                let id = font.glyph_id(c);
+                let kern = prev.map_or(0.0, |p| font.kern(p, id));
+                prev = Some(id);
+                x + kern + font.h_advance(id)
+            })
+        };
+
+        // Greedy word wrap; explicit newlines in the text are kept. A word
+        // wider than the window gets its own line and is cropped when drawn.
+        let max_width = (self.size.0 * self.scale as u32) as f32;
+        let mut lines = Vec::new();
+        for paragraph in self.config.text.split('\n') {
+            let mut line = String::new();
+            for word in paragraph.split_whitespace() {
+                let candidate = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
+                if !line.is_empty() && measure(&candidate) > max_width {
+                    lines.push(std::mem::replace(&mut line, word.to_string()));
+                } else {
+                    line = candidate;
+                }
             }
-            glyphs.push(id.with_scale_and_position(px, point(x, font.ascent())));
-            x += font.h_advance(id);
-            prev = Some(id);
+            lines.push(line);
         }
+        let widths: Vec<f32> = lines.iter().map(|l| measure(l)).collect();
+        let line_height = font.height() + font.line_gap();
 
         // Round up to a multiple of the scale so the logical size is whole.
         let s = self.scale as u32;
         let round = |v: f32| (v.ceil().max(0.0) as u32).div_ceil(s) * s;
-        let (w, h) = (round(x), round(font.ascent() - font.descent()));
+        let w = round(widths.iter().copied().fold(0.0, f32::max));
+        let h = round(line_height * lines.len() as f32 - font.line_gap());
         let mut coverage = vec![0f32; (w * h) as usize];
-        for glyph in glyphs {
-            let Some(outline) = font.outline_glyph(glyph) else { continue };
-            let b = outline.px_bounds();
-            outline.draw(|gx, gy, c| {
-                let x = gx as i32 + b.min.x as i32;
-                let y = gy as i32 + b.min.y as i32;
-                if x >= 0 && y >= 0 && (x as u32) < w && (y as u32) < h {
-                    let i = (y as u32 * w + x as u32) as usize;
-                    coverage[i] = (coverage[i] + c).min(1.0);
+        for (i, line) in lines.iter().enumerate() {
+            let mut x = (w as f32 - widths[i]) / 2.0;
+            let y = i as f32 * line_height + font.ascent();
+            let mut prev = None;
+            for c in line.chars() {
+                let id = font.glyph_id(c);
+                if let Some(p) = prev {
+                    x += font.kern(p, id);
                 }
-            });
+                prev = Some(id);
+                let glyph = id.with_scale_and_position(px, point(x, y));
+                x += font.h_advance(id);
+                let Some(outline) = font.outline_glyph(glyph) else { continue };
+                let b = outline.px_bounds();
+                outline.draw(|gx, gy, c| {
+                    let x = gx as i32 + b.min.x as i32;
+                    let y = gy as i32 + b.min.y as i32;
+                    if x >= 0 && y >= 0 && (x as u32) < w && (y as u32) < h {
+                        let i = (y as u32 * w + x as u32) as usize;
+                        coverage[i] = (coverage[i] + c).min(1.0);
+                    }
+                });
+            }
         }
 
         let color = self.config.text_color.to_le_bytes();
@@ -299,7 +340,7 @@ impl State {
         for c in coverage {
             pixels.extend(color.map(|ch| (ch as f32 * c + 0.5) as u8));
         }
-        self.text = Text { pixels, width: w, height: h };
+        self.text = Text { pixels, width: w, height: h, layout: Some(layout) };
     }
 
     fn draw(&mut self) {
@@ -317,24 +358,40 @@ impl State {
             .expect("create buffer");
         canvas[..4].copy_from_slice(&color.to_le_bytes());
         buffer.attach_to(&surface).expect("attach");
-        self.viewport.set_destination(self.size.0 as i32, self.size.1 as i32);
+        let (w, h) = self.size;
+        self.viewport.set_destination(w as i32, h as i32);
         surface.damage_buffer(0, 0, 1, 1);
+        // Without explicit geometry the compositor would include the text
+        // subsurface in the window's size, so text could hold the window open.
+        self.window.set_window_geometry(0, 0, w, h);
 
-        // Text subsurface: attached when visible, unmapped otherwise.
+        // Text subsurface: attached when visible, unmapped otherwise. Text is
+        // only laid out while visible, and again when the width changes; it is
+        // cropped to the window so a small window just shows less of it.
+        if visible && self.text.layout != Some((w, self.scale)) {
+            self.rasterize_text();
+        }
         let Text { width: tw, height: th, .. } = self.text;
-        if visible && tw > 0 && th > 0 {
+        let s = self.scale as u32;
+        let (cw, ch) = (tw.min(w * s) / s * s, th.min(h * s) / s * s);
+        if visible && cw > 0 && ch > 0 {
             let (buffer, canvas) = self
                 .pool
-                .create_buffer(tw as i32, th as i32, tw as i32 * 4, wl_shm::Format::Argb8888)
+                .create_buffer(cw as i32, ch as i32, cw as i32 * 4, wl_shm::Format::Argb8888)
                 .expect("create buffer");
-            canvas[..self.text.pixels.len()].copy_from_slice(&self.text.pixels);
+            let (ox, oy) = ((tw - cw) / 2, (th - ch) / 2);
+            for row in 0..ch {
+                let src = (((oy + row) * tw + ox) * 4) as usize;
+                let dst = (row * cw * 4) as usize;
+                let len = (cw * 4) as usize;
+                canvas[dst..dst + len].copy_from_slice(&self.text.pixels[src..src + len]);
+            }
             buffer.attach_to(&self.text_surface).expect("attach");
             self.text_surface.set_buffer_scale(self.scale);
-            self.text_surface.damage_buffer(0, 0, tw as i32, th as i32);
-            let s = self.scale as u32;
-            let x = (self.size.0 as i32 - (tw / s) as i32) / 2;
-            let y = (self.size.1 as i32 - (th / s) as i32) / 2;
-            self.text_sub.set_position(x, y);
+            self.text_surface.damage_buffer(0, 0, cw as i32, ch as i32);
+            let x = (w - cw / s) / 2;
+            let y = (h - ch / s) / 2;
+            self.text_sub.set_position(x as i32, y as i32);
         } else {
             self.text_surface.attach(None, 0, 0);
         }
@@ -354,7 +411,7 @@ impl CompositorHandler for State {
     ) {
         if surface == self.window.wl_surface() && new_factor != self.scale {
             self.scale = new_factor.max(1);
-            self.rasterize_text();
+            self.text = Text::default();
             self.draw();
         }
     }
@@ -448,6 +505,7 @@ impl SeatHandler for State {
     ) {
         if capability == Capability::Pointer && self.pointer.is_none() {
             self.pointer = self.seat_state.get_pointer(qh, &seat).ok();
+            self.seat = Some(seat);
         }
     }
 
@@ -484,7 +542,13 @@ impl PointerHandler for State {
             match event.kind {
                 PointerEventKind::Enter { .. } => self.hovered = true,
                 PointerEventKind::Leave { .. } => self.hovered = false,
-                PointerEventKind::Release { .. } => self.exit = true,
+                // Left drag hands the move to the compositor; right click closes.
+                PointerEventKind::Press { button: BTN_LEFT, serial, .. } => {
+                    if let Some(seat) = &self.seat {
+                        self.window.move_(seat, serial);
+                    }
+                }
+                PointerEventKind::Release { button: BTN_RIGHT, .. } => self.exit = true,
                 _ => {}
             }
         }

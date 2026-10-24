@@ -6,7 +6,7 @@ use serde::Deserialize;
 const DEFAULT_FILE: &str = r##"# polyptych configuration. Changes apply to running windows on save.
 
 # Text shown in the middle of the window.
-text = "Spacer, click to close"
+text = "Spacer, right-click to close"
 
 # Font: a name ("Inter", "Noto Sans Bold"), a generic family ("sans",
 # "serif", "monospace") or a file path ("/path/to/font.ttf").
@@ -49,7 +49,7 @@ struct Raw {
 impl Default for Raw {
     fn default() -> Self {
         Raw {
-            text: "Spacer, click to close".into(),
+            text: "Spacer, right-click to close".into(),
             font: "sans".into(),
             font_weight: 400,
             font_size: 18.0,
