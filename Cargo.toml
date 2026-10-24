@@ -1,0 +1,19 @@
+[package]
+name = "polyptych"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ab_glyph = "0.2.32"
+rustix = { version = "1.1.5", features = ["fs"] }
+serde = { version = "1.0.229", features = ["derive"] }
+smithay-client-toolkit = { version = "0.21.1", default-features = false, features = ["calloop"] }
+toml = { version = "1.1.8", default-features = false, features = ["parse", "serde"] }
+ttf-parser = { version = "0.25", default-features = false }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
