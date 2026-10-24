@@ -52,7 +52,8 @@ pub fn find(query: &str) -> Option<Face> {
     }
 }
 
-fn as_path(query: &str) -> Option<PathBuf> {
+/// An absolute or `~/` path; `None` for anything else, such as a font name.
+pub(crate) fn as_path(query: &str) -> Option<PathBuf> {
     if query.starts_with('/') {
         Some(PathBuf::from(query))
     } else {

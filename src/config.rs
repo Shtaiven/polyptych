@@ -8,7 +8,8 @@ const DEFAULT_FILE: &str = r##"# polyptych configuration. Changes apply to runni
 # The spacer always shows its idle look. When it is focused, hovered or
 # floating, focus_color and focus_text are drawn over it.
 
-# Idle look: a colour, or an image that replaces it.
+# Idle look: a colour, with an optional image drawn over it. The colour
+# shows through transparent parts of the image and around a zoomed one.
 idle_color = "#00000000"
 # A PNG or JPEG file, or a folder to pick a random one from each time a
 # spacer opens. Relative paths are relative to this file's folder.
@@ -68,7 +69,7 @@ pub enum Fit {
 #[serde(default, deny_unknown_fields)]
 struct Raw {
     idle_color: String,
-    idle_image: String,
+    idle_image: Option<String>,
     idle_image_fit: Fit,
     focus_text: String,
     font: String,
@@ -82,7 +83,7 @@ impl Default for Raw {
     fn default() -> Self {
         Raw {
             idle_color: "#00000000".into(),
-            idle_image: String::new(),
+            idle_image: None,
             idle_image_fit: Fit::Fill,
             focus_text: "Spacer, right-click to close".into(),
             font: "sans".into(),
@@ -110,7 +111,7 @@ impl Raw {
         }
         Ok(Config {
             idle_color: parse_color(&self.idle_color)?,
-            idle_image: resolve_path(&self.idle_image),
+            idle_image: self.idle_image.as_deref().and_then(resolve_path),
             idle_image_fit: self.idle_image_fit,
             focus_text: self.focus_text,
             font: self.font,
@@ -133,21 +134,20 @@ fn parse_color(s: &str) -> Result<u32, String> {
         _ => return Err(bad()),
     };
     let [r, g, b, a] = rgba.to_be_bytes();
-    let pm = |c: u8| (c as u32 * a as u32 + 127) / 255;
+    let pm = |c| premultiply(c, a) as u32;
     Ok((a as u32) << 24 | pm(r) << 16 | pm(g) << 8 | pm(b))
 }
 
-/// Expands `~/`, and resolves relative paths against the config folder.
+/// Scales a colour channel by alpha, rounding to nearest.
+pub fn premultiply(c: u8, a: u8) -> u8 {
+    ((c as u32 * a as u32 + 127) / 255) as u8
+}
+
+/// Expands `~/`, and resolves relative paths against the config folder. An
+/// empty path means none.
 fn resolve_path(s: &str) -> Option<PathBuf> {
     let s = s.trim();
-    if s.is_empty() {
-        return None;
-    }
-    let home = env::var_os("HOME").map(PathBuf::from);
-    Some(match (s.strip_prefix("~/"), home) {
-        (Some(rest), Some(home)) => home.join(rest),
-        _ => dir().join(s),
-    })
+    (!s.is_empty()).then(|| crate::font::as_path(s).unwrap_or_else(|| dir().join(s)))
 }
 
 pub fn dir() -> PathBuf {
