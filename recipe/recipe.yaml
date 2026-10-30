@@ -20,3 +20,5 @@ requirements:
 
 about:
   summary: An invisible spacer window for Wayland tiling layouts
+  license: MIT
+  license_file: LICENSE

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Polyptych
+Comment=Invisible spacer window for Wayland tiling layouts
+Exec=polyptych
+Icon=polyptych
+Terminal=false
+Categories=Utility;
+Keywords=spacer;tiling;wayland;padding;layout;
+StartupWMClass=polyptych

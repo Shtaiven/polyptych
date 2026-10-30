@@ -1,0 +1,50 @@
+# nfpm spec for polyptych: one definition for .deb and .rpm.
+#   https://nfpm.goreleaser.com/
+#
+# Build via packaging/build-packages.sh, which builds the release binary and
+# exports POLYPTYCH_VERSION (from Cargo.toml) and NFPM_ARCH.
+name: polyptych
+arch: ${NFPM_ARCH}
+platform: linux
+version: ${POLYPTYCH_VERSION}
+section: utils
+priority: optional
+maintainer: Steven Eisinger <steven.a.eisinger@gmail.com>
+description: |
+  An invisible window for padding layouts in Wayland tiling compositors
+  (COSMIC, sway, Hyprland, niri, ...). A native Wayland client with no toolkit.
+vendor: polyptych
+homepage: https://github.com/Shtaiven/polyptych
+license: MIT
+
+contents:
+  - src: target/release/polyptych
+    dst: /usr/bin/polyptych
+    file_info: { mode: 0755 }
+
+  - src: packaging/polyptych.desktop
+    dst: /usr/share/applications/polyptych.desktop
+    file_info: { mode: 0644 }
+
+  - src: assets/polyptych.svg
+    dst: /usr/share/icons/hicolor/scalable/apps/polyptych.svg
+    file_info: { mode: 0644 }
+
+  - src: README.md
+    dst: /usr/share/doc/polyptych/README.md
+    file_info: { mode: 0644 }
+
+  - src: LICENSE
+    dst: /usr/share/licenses/polyptych/LICENSE
+    file_info: { mode: 0644 }
+
+# The binary links only against libc and libgcc_s.
+overrides:
+  deb:
+    depends:
+      - libc6
+      - libgcc-s1
+  rpm:
+    depends:
+      - glibc
+      - libgcc

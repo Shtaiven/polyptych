@@ -25,6 +25,18 @@ repos:
         types: [rust]
         pass_filenames: false
 
+  # Shell formatter + syntax checking
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.11.0.1
+    hooks:
+      - id: shellcheck
+
+  - repo: https://github.com/scop/pre-commit-shfmt
+    rev: v3.13.1-1
+    hooks:
+      - id: shfmt
+        args: [-i, "2", -ci]
+
   # Markdown formatter
   - repo: https://github.com/hukkin/mdformat
     rev: 1.0.0

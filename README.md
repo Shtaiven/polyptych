@@ -12,15 +12,27 @@ It is a native Wayland client with no toolkit. It uses about 3.5 MB RSS and 0% C
 
 ## Install
 
+Each [release](https://github.com/Shtaiven/polyptych/releases) has a `.deb`, `.rpm` and tarball for x86_64 and aarch64:
+
+```sh
+sudo apt install ./polyptych_*_amd64.deb      # Debian, Ubuntu
+sudo dnf install ./polyptych-*.x86_64.rpm     # Fedora, openSUSE
+```
+
+Or build it from source:
+
 ```sh
 # You can install directly with cargo
 cargo install --path .           # installs to ~/.cargo/bin/polyptych
 
 # OR you can install globally with pixi
 pixi global install --force-reinstall --path .   # installs to ~/.pixi/bin/polyptych
+
+# OR you can install a release globally with pixi, without a checkout
+pixi global install --git https://github.com/Shtaiven/polyptych --tag vX.Y.Z
 ```
 
-The pixi install also adds a "Polyptych" launcher to your application menu (`~/.local/share/applications/polyptych_polyptych.desktop`), defined in `recipe/menu.json` with the icon from `assets/polyptych.svg`.
+The packages and the pixi install also add a "Polyptych" launcher to your application menu. For pixi it is defined in `recipe/menu.json` (installed as `~/.local/share/applications/polyptych_polyptych.desktop`), with the icon from `assets/polyptych.svg`.
 
 ## Config
 
@@ -89,3 +101,16 @@ Tiling compositors set the xdg_toplevel `tiled_*` states on tiled windows. A win
 
 - COSMIC draws its active-window hint around the spacer while it has focus. Set the hint size to 0 in Settings if that bothers you.
 - polyptych sets no real minimum size, but compositors may. COSMIC won't shrink a tile below 360×240 px, whatever the window asks for. Sway's minimum is 100×60.
+
+## Releasing
+
+The version lives only in `Cargo.toml`. To release:
+
+```sh
+# bump version in Cargo.toml, then:
+cargo build                          # updates Cargo.lock
+git commit -am "Release 0.2.0"
+git tag v0.2.0 && git push origin main v0.2.0
+```
+
+Pushing the tag runs `.github/workflows/release.yml`, which checks that the tag matches `Cargo.toml`, runs `packaging/build-packages.sh` on x86_64 and aarch64, and attaches the tarballs, `.deb`s and `.rpm`s to the GitHub release. Run that script locally (needs [nfpm](https://nfpm.goreleaser.com/install/)) to build the packages into `packaging/dist/`.

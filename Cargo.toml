@@ -2,6 +2,7 @@
 name = "polyptych"
 version = "0.1.1"
 edition = "2024"
+license = "MIT"
 
 [dependencies]
 ab_glyph = "0.2.32"
