@@ -46,7 +46,9 @@ pub fn load_any(path: &Path, shm: &Shm) -> Result<Image, String> {
     }
     files.sort();
     // No need for a real RNG: the clock and pid differ for every spacer.
-    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.subsec_nanos());
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.subsec_nanos());
     let start = (nanos ^ process::id().wrapping_mul(0x9e37_79b9)) as usize % files.len();
     for file in files[start..].iter().chain(&files[..start]) {
         match load(file, shm) {
@@ -115,7 +117,11 @@ fn decode_into_pool(
     if let Some(rgba) = rgba {
         expand(pixels, n, rgba);
     }
-    Ok(Image { pool, width: w as u32, height: h as u32 })
+    Ok(Image {
+        pool,
+        width: w as u32,
+        height: h as u32,
+    })
 }
 
 /// Expands `n`-channel pixels packed at the end of `pixels` to premultiplied

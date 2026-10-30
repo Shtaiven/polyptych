@@ -66,11 +66,11 @@ The font file is only read while the text is drawn, so it doesn't stay in memory
 
 Bind compositor shortcuts to spawn a spacer and to close them all:
 
-| Compositor | Spawn | Close all |
-|---|---|---|
-| COSMIC | Settings → Keyboard → Custom Shortcuts: `polyptych` | `pkill -x polyptych` |
-| sway | `bindsym $mod+s exec polyptych` | `bindsym $mod+Shift+s exec pkill -x polyptych` |
-| Hyprland | `bind = SUPER, S, exec, polyptych` | `bind = SUPER SHIFT, S, exec, pkill -x polyptych` |
+| Compositor | Spawn                                               | Close all                                         |
+| ---------- | --------------------------------------------------- | ------------------------------------------------- |
+| COSMIC     | Settings → Keyboard → Custom Shortcuts: `polyptych` | `pkill -x polyptych`                              |
+| sway       | `bindsym $mod+s exec polyptych`                     | `bindsym $mod+Shift+s exec pkill -x polyptych`    |
+| Hyprland   | `bind = SUPER, S, exec, polyptych`                  | `bind = SUPER SHIFT, S, exec, pkill -x polyptych` |
 
 ## How "floating" is detected
 

@@ -104,10 +104,16 @@ impl Default for Config {
 impl Raw {
     fn resolve(self) -> Result<Config, String> {
         if !(self.font_size > 0.0 && self.font_size <= 512.0) {
-            return Err(format!("font_size must be in (0, 512], got {}", self.font_size));
+            return Err(format!(
+                "font_size must be in (0, 512], got {}",
+                self.font_size
+            ));
         }
         if !(1..=1000).contains(&self.font_weight) {
-            return Err(format!("font_weight must be in 1..=1000, got {}", self.font_weight));
+            return Err(format!(
+                "font_weight must be in 1..=1000, got {}",
+                self.font_weight
+            ));
         }
         Ok(Config {
             idle_color: parse_color(&self.idle_color)?,
@@ -201,13 +207,20 @@ mod tests {
 
     #[test]
     fn default_file_parses() {
-        let c = toml::from_str::<Raw>(DEFAULT_FILE).unwrap().resolve().unwrap();
+        let c = toml::from_str::<Raw>(DEFAULT_FILE)
+            .unwrap()
+            .resolve()
+            .unwrap();
         assert!(c == Config::default());
     }
 
     #[test]
     fn idle_options() {
-        let parse = |s: &str| toml::from_str::<Raw>(s).map_err(|e| e.to_string())?.resolve();
+        let parse = |s: &str| {
+            toml::from_str::<Raw>(s)
+                .map_err(|e| e.to_string())?
+                .resolve()
+        };
         assert!(parse(r#"idle_image_fit = "tile""#).unwrap().idle_image_fit == Fit::Tile);
         assert!(parse(r#"idle_image_fit = "bogus""#).is_err());
         assert!(parse(r#"text = "old name""#).is_err());

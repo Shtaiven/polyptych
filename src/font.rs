@@ -3,11 +3,11 @@
 //! A query is tried as a file path, then with `fc-match`, then by scanning the
 //! XDG font directories and matching font names read from each file.
 
+use std::env;
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::PathBuf;
 use std::process::Command;
-use std::env;
 
 use ttf_parser::name::Table;
 use ttf_parser::name_id;
@@ -20,15 +20,33 @@ pub struct Face {
 }
 
 const SANS: &[&str] = &[
-    "Noto Sans", "DejaVu Sans", "Adwaita Sans", "Liberation Sans", "Cantarell", "Inter",
-    "Open Sans", "Roboto", "Ubuntu", "Fira Sans", "FreeSans",
+    "Noto Sans",
+    "DejaVu Sans",
+    "Adwaita Sans",
+    "Liberation Sans",
+    "Cantarell",
+    "Inter",
+    "Open Sans",
+    "Roboto",
+    "Ubuntu",
+    "Fira Sans",
+    "FreeSans",
 ];
 const SERIF: &[&str] = &[
-    "Noto Serif", "DejaVu Serif", "Liberation Serif", "Source Serif 4", "FreeSerif",
+    "Noto Serif",
+    "DejaVu Serif",
+    "Liberation Serif",
+    "Source Serif 4",
+    "FreeSerif",
 ];
 const MONO: &[&str] = &[
-    "Noto Sans Mono", "DejaVu Sans Mono", "Adwaita Mono", "Liberation Mono", "Fira Mono",
-    "Source Code Pro", "FreeMono",
+    "Noto Sans Mono",
+    "DejaVu Sans Mono",
+    "Adwaita Mono",
+    "Liberation Mono",
+    "Fira Mono",
+    "Source Code Pro",
+    "FreeMono",
 ];
 
 /// Finds a face for a font name ("Inter"), a generic family ("sans", "serif",
@@ -47,7 +65,12 @@ pub fn find(query: &str) -> Option<Face> {
         Some(families) => families
             .iter()
             .find_map(|family| by_name(&files, family))
-            .or_else(|| files.first().map(|p| Face { path: p.clone(), index: 0 })),
+            .or_else(|| {
+                files.first().map(|p| Face {
+                    path: p.clone(),
+                    index: 0,
+                })
+            }),
         None => by_name(&files, query),
     }
 }
@@ -87,7 +110,10 @@ fn fc_match(family: &str) -> Option<Face> {
     // fc-match always answers, substituting a default for unknown names.
     let want = normalize(family);
     if generic(family).is_none() && !families.split(',').any(|f| want == normalize(f)) {
-        eprintln!("{}: font {family:?} not installed, fontconfig chose {families:?}", crate::APP);
+        eprintln!(
+            "{}: font {family:?} not installed, fontconfig chose {families:?}",
+            crate::APP
+        );
     }
     let path = PathBuf::from(file);
     // The upper 16 bits name a variable font's named instance; the weight is
@@ -114,7 +140,9 @@ fn font_files() -> Vec<PathBuf> {
 
     let mut files = Vec::new();
     while let Some(dir) = dirs.pop() {
-        let Ok(entries) = fs::read_dir(&dir) else { continue };
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
         for entry in entries.flatten() {
             let path = entry.path();
             if entry.file_type().is_ok_and(|t| t.is_dir()) {
@@ -135,7 +163,8 @@ fn font_files() -> Vec<PathBuf> {
 fn by_name(files: &[PathBuf], name: &str) -> Option<Face> {
     let want = normalize(name);
     let (likely, rest): (Vec<_>, Vec<_>) = files.iter().partition(|p| {
-        p.file_stem().is_some_and(|s| normalize(&s.to_string_lossy()).contains(&want))
+        p.file_stem()
+            .is_some_and(|s| normalize(&s.to_string_lossy()).contains(&want))
     });
     best_match(&likely, &want).or_else(|| best_match(&rest, &want))
 }
@@ -146,7 +175,13 @@ fn best_match(files: &[&PathBuf], want: &str) -> Option<Face> {
         for (index, names) in faces(path) {
             let score = names.score(want);
             if score > best.as_ref().map_or(0, |b| b.0) {
-                best = Some((score, Face { path: (*path).clone(), index }));
+                best = Some((
+                    score,
+                    Face {
+                        path: (*path).clone(),
+                        index,
+                    },
+                ));
                 if score == 3 {
                     return best.map(|b| b.1);
                 }
@@ -158,7 +193,10 @@ fn best_match(files: &[&PathBuf], want: &str) -> Option<Face> {
 
 /// Lowercase alphanumerics only, so "Noto Sans" matches "NotoSans-Regular".
 fn normalize(s: &str) -> String {
-    s.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect()
+    s.chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
 }
 
 #[derive(Default)]
@@ -172,7 +210,8 @@ impl Names {
     /// 3: exact face ("Noto Sans Bold") or the regular face of the family.
     /// 2: another style of the family. 0: no match.
     fn score(&self, want: &str) -> u8 {
-        let regular = ["", "regular", "book", "normal", "roman"].contains(&normalize(&self.style).as_str());
+        let regular =
+            ["", "regular", "book", "normal", "roman"].contains(&normalize(&self.style).as_str());
         if normalize(&self.full) == want || (normalize(&self.family) == want && regular) {
             3
         } else if normalize(&self.family) == want {
@@ -186,8 +225,12 @@ impl Names {
 /// Reads the names of every face in a font file, touching only the header and
 /// `name` table rather than the whole file.
 fn faces(path: &PathBuf) -> Vec<(u32, Names)> {
-    let Ok(mut file) = File::open(path) else { return Vec::new() };
-    let Some(head) = read_at(&mut file, 0, 12) else { return Vec::new() };
+    let Ok(mut file) = File::open(path) else {
+        return Vec::new();
+    };
+    let Some(head) = read_at(&mut file, 0, 12) else {
+        return Vec::new();
+    };
     let offsets = if &head[..4] == b"ttcf" {
         let count = be32(&head[8..]).min(256) as usize;
         read_at(&mut file, 12, count * 4)
@@ -207,14 +250,20 @@ fn face_names(file: &mut File, offset: u64) -> Option<Names> {
     let tables = u16::from_be_bytes([header[4], header[5]]) as usize;
     let records = read_at(file, offset + 12, tables * 16)?;
     let record = records.chunks_exact(16).find(|r| &r[..4] == b"name")?;
-    let data = read_at(file, be32(&record[8..]) as u64, be32(&record[12..]) as usize)?;
+    let data = read_at(
+        file,
+        be32(&record[8..]) as u64,
+        be32(&record[12..]) as usize,
+    )?;
     let table = Table::parse(&data)?;
 
     // Prefer US English names, else take the first readable one of each kind.
     let mut slots: [Option<(bool, String)>; 18] = Default::default();
     for name in table.names {
         let id = name.name_id as usize;
-        let Some(text) = (id < slots.len()).then(|| name.to_string()).flatten() else { continue };
+        let Some(text) = (id < slots.len()).then(|| name.to_string()).flatten() else {
+            continue;
+        };
         let english = name.language_id == 0x409;
         if slots[id].as_ref().is_none_or(|(en, _)| english && !en) {
             slots[id] = Some((english, text));
@@ -225,10 +274,20 @@ fn face_names(file: &mut File, offset: u64) -> Option<Names> {
     // Typographic names group weights under one family ("Noto Sans" + "Light")
     // where the legacy names would say "Noto Sans Light" + "Regular".
     let (family, style) = match take(name_id::TYPOGRAPHIC_FAMILY) {
-        Some(family) => (family, take(name_id::TYPOGRAPHIC_SUBFAMILY).unwrap_or_default()),
-        None => (take(name_id::FAMILY)?, take(name_id::SUBFAMILY).unwrap_or_default()),
+        Some(family) => (
+            family,
+            take(name_id::TYPOGRAPHIC_SUBFAMILY).unwrap_or_default(),
+        ),
+        None => (
+            take(name_id::FAMILY)?,
+            take(name_id::SUBFAMILY).unwrap_or_default(),
+        ),
     };
-    Some(Names { family, style, full })
+    Some(Names {
+        family,
+        style,
+        full,
+    })
 }
 
 fn read_at(file: &mut File, offset: u64, len: usize) -> Option<Vec<u8>> {
@@ -254,8 +313,14 @@ mod tests {
             full: full.into(),
         };
         let want = normalize("Noto Sans");
-        assert_eq!(names("Noto Sans", "Regular", "Noto Sans Regular").score(&want), 3);
-        assert_eq!(names("Noto Sans", "Light", "Noto Sans Light").score(&want), 2);
+        assert_eq!(
+            names("Noto Sans", "Regular", "Noto Sans Regular").score(&want),
+            3
+        );
+        assert_eq!(
+            names("Noto Sans", "Light", "Noto Sans Light").score(&want),
+            2
+        );
         assert_eq!(names("Noto Serif", "Regular", "Noto Serif").score(&want), 0);
         let bold = normalize("Noto Sans Bold");
         assert_eq!(names("Noto Sans", "Bold", "Noto Sans Bold").score(&bold), 3);
@@ -267,4 +332,3 @@ mod tests {
         assert!(as_path("Noto Sans").is_none());
     }
 }
-

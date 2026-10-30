@@ -69,9 +69,8 @@ fn main() {
     let qh = event_queue.handle();
 
     let compositor = CompositorState::bind(&globals, &qh).expect("wl_compositor missing");
-    let subcompositor =
-        SubcompositorState::bind(compositor.wl_compositor().clone(), &globals, &qh)
-            .expect("wl_subcompositor missing");
+    let subcompositor = SubcompositorState::bind(compositor.wl_compositor().clone(), &globals, &qh)
+        .expect("wl_subcompositor missing");
     let xdg_shell = XdgShell::bind(&globals, &qh).expect("xdg_shell missing");
     let shm = Shm::bind(&globals, &qh).expect("wl_shm missing");
     let pool = SlotPool::new(4096, &shm).expect("shm pool");
@@ -107,7 +106,11 @@ fn main() {
     let layer = || {
         let (sub, surface) = subsurface();
         let viewport = wp_viewporter.get_viewport(&surface, &qh, ());
-        Layer { surface, sub, viewport }
+        Layer {
+            surface,
+            sub,
+            viewport,
+        }
     };
     let image_layer = layer();
     let overlay = layer();
@@ -182,7 +185,9 @@ fn main() {
 
     while !state.exit {
         // No timeout: sleep until a Wayland or inotify event arrives.
-        event_loop.dispatch(None, &mut state).expect("event loop dispatch");
+        event_loop
+            .dispatch(None, &mut state)
+            .expect("event loop dispatch");
     }
 }
 
@@ -193,7 +198,10 @@ fn config_changed(fd: impl AsFd) -> bool {
     let mut reader = inotify::Reader::new(fd, &mut buf);
     let mut hit = false;
     while let Ok(event) = reader.next() {
-        if event.file_name().is_some_and(|n| n.to_bytes() == name.as_bytes()) {
+        if event
+            .file_name()
+            .is_some_and(|n| n.to_bytes() == name.as_bytes())
+        {
             hit = true;
         }
     }
@@ -219,9 +227,21 @@ fn resolve_font(query: &str) -> Option<font::Face> {
 /// never changes after this.
 fn load_idle_image(config: &Config, shm: &Shm) -> Option<IdleImage> {
     let path = config.idle_image.as_ref()?;
-    let image::Image { pool, width, height } =
-        image::load_any(path, shm).map_err(|e| eprintln!("{APP}: {e}")).ok()?;
-    Some(IdleImage { pool, width, height, current: None, previous: None, tile_pool: None })
+    let image::Image {
+        pool,
+        width,
+        height,
+    } = image::load_any(path, shm)
+        .map_err(|e| eprintln!("{APP}: {e}"))
+        .ok()?;
+    Some(IdleImage {
+        pool,
+        width,
+        height,
+        current: None,
+        previous: None,
+        tile_pool: None,
+    })
 }
 
 /// A surface stacked above the window, sized with its own viewport.
@@ -239,8 +259,9 @@ fn fill(
     (w, h): (u32, u32),
     color: u32,
 ) {
-    let (buffer, canvas) =
-        pool.create_buffer(1, 1, 4, wl_shm::Format::Argb8888).expect("create buffer");
+    let (buffer, canvas) = pool
+        .create_buffer(1, 1, 4, wl_shm::Format::Argb8888)
+        .expect("create buffer");
     canvas[..4].copy_from_slice(&color.to_le_bytes());
     buffer.attach_to(surface).expect("attach");
     viewport.set_destination(w as i32, h as i32);
@@ -260,9 +281,21 @@ fn place(fit: Fit, (w, h): (u32, u32), (iw, ih): (u32, u32)) -> (Rect, Rect) {
     let window = (0, 0, w as u32, h as u32);
     match fit {
         Fit::Zoom => {
-            let (dw, dh) = if wider { (iw * h / ih, h) } else { (w, ih * w / iw) };
+            let (dw, dh) = if wider {
+                (iw * h / ih, h)
+            } else {
+                (w, ih * w / iw)
+            };
             let (dw, dh) = (dw.max(1), dh.max(1));
-            (whole, (((w - dw) / 2) as u32, ((h - dh) / 2) as u32, dw as u32, dh as u32))
+            (
+                whole,
+                (
+                    ((w - dw) / 2) as u32,
+                    ((h - dh) / 2) as u32,
+                    dw as u32,
+                    dh as u32,
+                ),
+            )
         }
         Fit::Fill => {
             // Crop the image to the window's aspect ratio, centred.
@@ -271,7 +304,12 @@ fn place(fit: Fit, (w, h): (u32, u32), (iw, ih): (u32, u32)) -> (Rect, Rect) {
             } else {
                 ((ih * w / h).clamp(1, iw), ih)
             };
-            let crop = (((iw - sw) / 2) as u32, ((ih - sh) / 2) as u32, sw as u32, sh as u32);
+            let crop = (
+                ((iw - sw) / 2) as u32,
+                ((ih - sh) / 2) as u32,
+                sw as u32,
+                sh as u32,
+            );
             (crop, window)
         }
         Fit::Stretch => (whole, window),
@@ -303,7 +341,9 @@ impl IdleImage {
         let offset = ((y * self.width + x) * 4) as i32;
         let stride = self.width as i32 * 4;
         let format = wl_shm::Format::Argb8888;
-        let buffer = self.pool.create_buffer(offset, w as i32, h as i32, stride, format, (), qh);
+        let buffer = self
+            .pool
+            .create_buffer(offset, w as i32, h as i32, stride, format, (), qh);
         let replaced = std::mem::replace(&mut self.previous, self.current.replace(buffer.clone()));
         if let Some(old) = replaced {
             old.destroy();
@@ -314,7 +354,10 @@ impl IdleImage {
 
 impl Drop for IdleImage {
     fn drop(&mut self) {
-        self.current.iter().chain(&self.previous).for_each(|b| b.destroy());
+        self.current
+            .iter()
+            .chain(&self.previous)
+            .for_each(|b| b.destroy());
     }
 }
 
@@ -398,12 +441,17 @@ impl State {
     /// Lays the text out word-wrapped to the window width and rasterizes it.
     fn rasterize_text(&mut self) {
         let layout = (self.size.0, self.scale);
-        self.text = Text { layout: Some(layout), ..Text::default() };
+        self.text = Text {
+            layout: Some(layout),
+            ..Text::default()
+        };
         let Some(face) = &self.font else { return };
         // The font is read from disk only while rasterizing, then dropped.
         let font = fs::read(&face.path)
             .map_err(|e| e.to_string())
-            .and_then(|data| FontVec::try_from_vec_and_index(data, face.index).map_err(|e| e.to_string()));
+            .and_then(|data| {
+                FontVec::try_from_vec_and_index(data, face.index).map_err(|e| e.to_string())
+            });
         let mut font = match font {
             Ok(font) => font,
             Err(e) => {
@@ -433,7 +481,11 @@ impl State {
         for paragraph in self.config.focus_text.split('\n') {
             let mut line = String::new();
             for word in paragraph.split_whitespace() {
-                let candidate = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
+                let candidate = if line.is_empty() {
+                    word.to_string()
+                } else {
+                    format!("{line} {word}")
+                };
                 if !line.is_empty() && measure(&candidate) > max_width {
                     lines.push(std::mem::replace(&mut line, word.to_string()));
                 } else {
@@ -463,7 +515,9 @@ impl State {
                 prev = Some(id);
                 let glyph = id.with_scale_and_position(px, point(x, y));
                 x += font.h_advance(id);
-                let Some(outline) = font.outline_glyph(glyph) else { continue };
+                let Some(outline) = font.outline_glyph(glyph) else {
+                    continue;
+                };
                 let b = outline.px_bounds();
                 outline.draw(|gx, gy, c| {
                     let x = gx as i32 + b.min.x as i32;
@@ -481,7 +535,12 @@ impl State {
         for c in coverage {
             pixels.extend(color.map(|ch| (ch as f32 * c + 0.5) as u8));
         }
-        self.text = Text { pixels, width: w, height: h, layout: Some(layout) };
+        self.text = Text {
+            pixels,
+            width: w,
+            height: h,
+            layout: Some(layout),
+        };
     }
 
     fn draw(&mut self) {
@@ -493,7 +552,13 @@ impl State {
 
         let (w, h) = self.size;
         // The idle colour, under the idle image if there is one.
-        fill(&mut self.pool, &surface, &self.viewport, self.size, self.config.idle_color);
+        fill(
+            &mut self.pool,
+            &surface,
+            &self.viewport,
+            self.size,
+            self.config.idle_color,
+        );
         // Without explicit geometry the compositor would include the
         // subsurfaces in the window's size, so text could hold the window open.
         self.window.set_window_geometry(0, 0, w, h);
@@ -503,9 +568,19 @@ impl State {
             self.layout_image();
         }
 
-        let Layer { surface: overlay, viewport, .. } = &self.overlay;
+        let Layer {
+            surface: overlay,
+            viewport,
+            ..
+        } = &self.overlay;
         if visible {
-            fill(&mut self.pool, overlay, viewport, self.size, self.config.focus_color);
+            fill(
+                &mut self.pool,
+                overlay,
+                viewport,
+                self.size,
+                self.config.focus_color,
+            );
         } else {
             overlay.attach(None, 0, 0);
         }
@@ -516,13 +591,22 @@ impl State {
         if visible && self.text.layout != Some((w, self.scale)) {
             self.rasterize_text();
         }
-        let Text { width: tw, height: th, .. } = self.text;
+        let Text {
+            width: tw,
+            height: th,
+            ..
+        } = self.text;
         let s = self.scale as u32;
         let (cw, ch) = (tw.min(w * s) / s * s, th.min(h * s) / s * s);
         if visible && cw > 0 && ch > 0 {
             let (buffer, canvas) = self
                 .pool
-                .create_buffer(cw as i32, ch as i32, cw as i32 * 4, wl_shm::Format::Argb8888)
+                .create_buffer(
+                    cw as i32,
+                    ch as i32,
+                    cw as i32 * 4,
+                    wl_shm::Format::Argb8888,
+                )
                 .expect("create buffer");
             let (ox, oy) = ((tw - cw) / 2, (th - ch) / 2);
             for row in 0..ch {
@@ -549,7 +633,11 @@ impl State {
 
     /// Places the idle image for the current window size and fit mode.
     fn layout_image(&mut self) {
-        let Layer { surface, sub, viewport } = &self.image_layer;
+        let Layer {
+            surface,
+            sub,
+            viewport,
+        } = &self.image_layer;
         let Some(image) = &mut self.idle_image else {
             surface.attach(None, 0, 0);
             return;
@@ -567,7 +655,12 @@ impl State {
                 let new_pool = || SlotPool::new(4096, shm).expect("shm pool");
                 let pool = image.tile_pool.get_or_insert_with(new_pool);
                 let (buffer, canvas) = pool
-                    .create_buffer(bw as i32, bh as i32, bw as i32 * 4, wl_shm::Format::Argb8888)
+                    .create_buffer(
+                        bw as i32,
+                        bh as i32,
+                        bw as i32 * 4,
+                        wl_shm::Format::Argb8888,
+                    )
                     .expect("create buffer");
                 let (iw, ih) = (image.width as usize, image.height as usize);
                 let src = &image.pool.mmap()[..iw * ih * 4];
@@ -623,8 +716,7 @@ impl CompositorHandler for State {
     ) {
     }
 
-    fn frame(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: u32) {
-    }
+    fn frame(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: u32) {}
 
     fn surface_enter(
         &mut self,
@@ -654,8 +746,7 @@ impl OutputHandler for State {
 
     fn update_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
 
-    fn output_destroyed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {
-    }
+    fn output_destroyed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
 }
 
 impl WindowHandler for State {
@@ -679,9 +770,8 @@ impl WindowHandler for State {
         self.focused = state.contains(WindowState::ACTIVATED);
         // Tiling compositors send tiled states to tiled windows; anything
         // else that isn't maximized or fullscreen is floating.
-        self.floating = !state.intersects(
-            WindowState::TILED | WindowState::MAXIMIZED | WindowState::FULLSCREEN,
-        );
+        self.floating = !state
+            .intersects(WindowState::TILED | WindowState::MAXIMIZED | WindowState::FULLSCREEN);
         self.configured = true;
         self.draw();
     }
@@ -741,12 +831,18 @@ impl PointerHandler for State {
                 PointerEventKind::Enter { .. } => self.hovered = true,
                 PointerEventKind::Leave { .. } => self.hovered = false,
                 // Left drag hands the move to the compositor; right click closes.
-                PointerEventKind::Press { button: BTN_LEFT, serial, .. } => {
+                PointerEventKind::Press {
+                    button: BTN_LEFT,
+                    serial,
+                    ..
+                } => {
                     if let Some(seat) = &self.seat {
                         self.window.move_(seat, serial);
                     }
                 }
-                PointerEventKind::Release { button: BTN_RIGHT, .. } => self.exit = true,
+                PointerEventKind::Release {
+                    button: BTN_RIGHT, ..
+                } => self.exit = true,
                 _ => {}
             }
         }
@@ -803,9 +899,18 @@ mod tests {
     fn placement() {
         // A 400x200 image in a 100x100 window.
         let img = (400, 200);
-        assert_eq!(place(Fit::Zoom, (100, 100), img), ((0, 0, 400, 200), (0, 25, 100, 50)));
-        assert_eq!(place(Fit::Fill, (100, 100), img), ((100, 0, 200, 200), (0, 0, 100, 100)));
-        assert_eq!(place(Fit::Stretch, (100, 100), img), ((0, 0, 400, 200), (0, 0, 100, 100)));
+        assert_eq!(
+            place(Fit::Zoom, (100, 100), img),
+            ((0, 0, 400, 200), (0, 25, 100, 50))
+        );
+        assert_eq!(
+            place(Fit::Fill, (100, 100), img),
+            ((100, 0, 200, 200), (0, 0, 100, 100))
+        );
+        assert_eq!(
+            place(Fit::Stretch, (100, 100), img),
+            ((0, 0, 400, 200), (0, 0, 100, 100))
+        );
         // A tall window crops the sides; a wide one crops top and bottom.
         assert_eq!(place(Fit::Fill, (100, 400), img).0, (175, 0, 50, 200));
         assert_eq!(place(Fit::Fill, (800, 100), img).0, (0, 75, 400, 50));
