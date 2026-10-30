@@ -1,0 +1,22 @@
+package:
+  name: ${{ load_from_file("../Cargo.toml").package.name }}
+  version: ${{ load_from_file("../Cargo.toml").package.version }}
+
+source:
+  path: ..
+  use_gitignore: true
+
+build:
+  number: 0
+  script:
+    - cargo install --locked --force --no-track --root "$PREFIX" --path .
+    - mkdir -p "$PREFIX/Menu"
+    - cp recipe/menu.json "$PREFIX/Menu/$PKG_NAME.json"
+    - cp assets/polyptych.svg "$PREFIX/Menu/polyptych.svg"
+
+requirements:
+  build:
+    - ${{ compiler('rust') }}
+
+about:
+  summary: An invisible spacer window for Wayland tiling layouts

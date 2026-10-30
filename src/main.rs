@@ -64,6 +64,14 @@ const BTN_LEFT: u32 = 0x110;
 const BTN_RIGHT: u32 = 0x111;
 
 fn main() {
+    if std::env::args()
+        .skip(1)
+        .any(|a| a == "--version" || a == "-V")
+    {
+        println!("{APP} {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
+
     let conn = Connection::connect_to_env().expect("not running under Wayland");
     let (globals, event_queue) = registry_queue_init(&conn).expect("registry init failed");
     let qh = event_queue.handle();
@@ -804,10 +812,10 @@ impl SeatHandler for State {
         _: wl_seat::WlSeat,
         capability: Capability,
     ) {
-        if capability == Capability::Pointer {
-            if let Some(pointer) = self.pointer.take() {
-                pointer.release();
-            }
+        if capability == Capability::Pointer
+            && let Some(pointer) = self.pointer.take()
+        {
+            pointer.release();
         }
     }
 

@@ -14,6 +14,9 @@ use zune_core::options::DecoderOptions;
 
 use crate::config::premultiply;
 
+/// Reads one decoded pixel as RGBA.
+type ToRgba = fn(&[u8]) -> [u8; 4];
+
 /// Larger images are refused rather than eating hundreds of MB.
 const MAX_SIDE: usize = 8192;
 
@@ -97,7 +100,7 @@ fn decode_into_pool(
     let (w, h) = dims.ok_or("missing image size")?;
     let colorspace = colorspace.ok_or("missing colour space")?;
     // How to read each decoded pixel as RGBA; `None` if it needs no conversion.
-    let rgba: Option<fn(&[u8]) -> [u8; 4]> = match colorspace {
+    let rgba: Option<ToRgba> = match colorspace {
         // JPEG decodes to BGRA directly and is opaque, so already premultiplied.
         ColorSpace::BGRA => None,
         ColorSpace::RGBA => Some(|p| [p[0], p[1], p[2], p[3]]),
@@ -127,7 +130,7 @@ fn decode_into_pool(
 /// Expands `n`-channel pixels packed at the end of `pixels` to premultiplied
 /// BGRA filling all of it. Each write lands at or before the pixel it reads,
 /// so this works in place.
-fn expand(pixels: &mut [u8], n: usize, rgba: fn(&[u8]) -> [u8; 4]) {
+fn expand(pixels: &mut [u8], n: usize, rgba: ToRgba) {
     let count = pixels.len() / 4;
     let tail = pixels.len() - count * n;
     for i in 0..count {

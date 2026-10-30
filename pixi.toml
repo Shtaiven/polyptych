@@ -4,6 +4,13 @@ platforms = ["linux-64", "linux-aarch64"]
 preview = ["pixi-build"]
 
 [package]
+name = "polyptych"
 
+# pixi-build-rust only runs `cargo install`, so use a recipe to also install
+# the desktop shortcut (recipe/menu.json) and icon.
 [package.build]
-backend = { name = "pixi-build-rust", version = "*" }
+backend = { name = "pixi-build-rattler-build", version = "*" }
+
+# Lets the recipe read its name and version from Cargo.toml (load_from_file).
+[package.build.config]
+experimental = true

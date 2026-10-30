@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/polyptych.svg" alt="polyptych" width="128" />
+</p>
+
 # polyptych
 
 An invisible window for padding layouts in Wayland tiling compositors (COSMIC, sway, Hyprland, niri, …).
@@ -12,6 +16,8 @@ It is a native Wayland client with no toolkit. It uses about 3.5 MB RSS and 0% C
 cargo install --path .           # → ~/.cargo/bin/polyptych
 pixi global install --force-reinstall --path .   # → ~/.pixi/bin/polyptych
 ```
+
+The pixi install also adds a "Polyptych" launcher to your application menu (`~/.local/share/applications/polyptych_polyptych.desktop`), defined in `recipe/menu.json` with the icon from `assets/polyptych.svg`.
 
 ## Config
 

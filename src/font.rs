@@ -234,7 +234,7 @@ fn faces(path: &PathBuf) -> Vec<(u32, Names)> {
     let offsets = if &head[..4] == b"ttcf" {
         let count = be32(&head[8..]).min(256) as usize;
         read_at(&mut file, 12, count * 4)
-            .map(|raw| raw.chunks_exact(4).map(be32).collect())
+            .map(|raw| raw.as_chunks::<4>().0.iter().map(|c| be32(c)).collect())
             .unwrap_or_default()
     } else {
         vec![0]
@@ -249,7 +249,11 @@ fn face_names(file: &mut File, offset: u64) -> Option<Names> {
     let header = read_at(file, offset, 12)?;
     let tables = u16::from_be_bytes([header[4], header[5]]) as usize;
     let records = read_at(file, offset + 12, tables * 16)?;
-    let record = records.chunks_exact(16).find(|r| &r[..4] == b"name")?;
+    let record = records
+        .as_chunks::<16>()
+        .0
+        .iter()
+        .find(|r| &r[..4] == b"name")?;
     let data = read_at(
         file,
         be32(&record[8..]) as u64,
