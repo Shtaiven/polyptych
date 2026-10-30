@@ -13,8 +13,11 @@ It is a native Wayland client with no toolkit. It uses about 3.5 MB RSS and 0% C
 ## Install
 
 ```sh
-cargo install --path .           # → ~/.cargo/bin/polyptych
-pixi global install --force-reinstall --path .   # → ~/.pixi/bin/polyptych
+# You can install directly with cargo
+cargo install --path .           # installs to ~/.cargo/bin/polyptych
+
+# OR you can install globally with pixi
+pixi global install --force-reinstall --path .   # installs to ~/.pixi/bin/polyptych
 ```
 
 The pixi install also adds a "Polyptych" launcher to your application menu (`~/.local/share/applications/polyptych_polyptych.desktop`), defined in `recipe/menu.json` with the icon from `assets/polyptych.svg`.
